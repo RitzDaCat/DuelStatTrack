@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gaming Performance Tracker</title>
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.10.24/css/jquery.dataTables.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css">
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://unpkg.com/dexie@latest/dist/dexie.js"></script>
+    <script src="https://cdn.datatables.net/1.10.24/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-100 text-gray-800 font-sans">
+    <div class="container mx-auto p-4">
+        <h1 class="text-3xl font-bold mb-4">Gaming Performance Tracker</h1>
+        
+        <form id="performanceForm" class="mb-8">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label for="game" class="block mb-2">Game:</label>
+                    <select id="game" name="game" class="w-full p-2 border rounded">
+                        <option value="">Select a game</option>
+                        <option value="Splitgate">Splitgate</option>
+                        <option value="Quake Champions">Quake Champions</option>
+                    </select>
+                </div>
+                <div class="relative">
+                    <label for="mapSelect" class="block mb-2">Map:</label>
+                    <input id="mapSelect" type="text" name="map" placeholder="Select a map" readonly class="w-full p-2 border rounded cursor-pointer">
+                    <div id="mapOptions" class="map-options absolute left-0 w-full bg-white border rounded mt-1 max-h-40 overflow-y-auto hidden"></div>
+                </div>
+                <div>
+                    <label for="cm360" class="block mb-2">cm/360:</label>
+                    <input type="number" id="cm360" name="cm360" step="0.1" class="w-full p-2 border rounded">
+                </div>
+                <div>
+                    <label for="accuracy" class="block mb-2">Accuracy (%):</label>
+                    <input type="number" id="accuracy" name="accuracy" step="0.1" class="w-full p-2 border rounded">
+                </div>
+                <div>
+                    <label for="mousepad" class="block mb-2">Mousepad:</label>
+                    <input type="text" id="mousepad" name="mousepad" class="w-full p-2 border rounded">
+                </div>
+                <div>
+                    <label for="yourScore" class="block mb-2">Your Score:</label>
+                    <input type="number" id="yourScore" name="yourScore" class="w-full p-2 border rounded">
+                </div>
+                <div>
+                    <label for="opponentScore" class="block mb-2">Opponent Score:</label>
+                    <input type="number" id="opponentScore" name="opponentScore" class="w-full p-2 border rounded">
+                </div>
+            </div>
+            <button type="submit" class="mt-4 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Add Performance</button>
+        </form>
+        
+        <div class="mb-4">
+            <button id="exportBtn" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">Export Data</button>
+            <button id="clearBtn" class="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600">Clear All Entries</button>
+        </div>
+        
+        <table id="performanceTable" class="display">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Game</th>
+                    <th>Map</th>
+                    <th>cm/360</th>
+                    <th>Accuracy</th>
+                    <th>Mousepad</th>
+                    <th>Your Score</th>
+                    <th>Opponent Score</th>
+                    <th>Outcome</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+        </table>
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-8">
+            <div>
+                <canvas id="accuracyCm360Chart"></canvas>
+            </div>
+            <div>
+                <canvas id="accuracyMousepadChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize Dexie database
+        const db = new Dexie('GamingPerformanceDB');
+        db.version(1).stores({
+            performances: '++id, date, game, map, cm360, accuracy, mousepad, yourScore, opponentScore, outcome'
+        });
+
+        // Define map options for each game
+        const mapsByGame = {
+            'Splitgate': ['Olympus', 'Pantheon', 'Oasis', 'Club Silo', 'Atlantis', 'Abyss', 'Foregone Destruction', 'Impact', 'Highwind', 'Helix'],
+            'Quake Champions': ['Awoken', 'Blood Covenant', 'Blood Run', 'Burial Chamber', 'Corrupted Keep', 'Deep Embrace', 'Longest Yard', 'Molten Falls', 'Ruins of Sarnath', 'Vale of Pnath']
+        };
+
+        // Cache DOM elements
+        const form = document.getElementById('performanceForm');
+        const gameSelect = document.getElementById('game');
+        const mapSelect = document.getElementById('mapSelect');
+        const mapOptions = document.getElementById('mapOptions');
+
+        // Initialize charts
+        let accuracyCm360Chart;
+        let accuracyMousepadChart;
+
+        // Add event listeners
+        gameSelect.addEventListener('change', updateMapOptions);
+        mapSelect.addEventListener('click', toggleMapOptions);
+        document.addEventListener('click', handleOutsideClick);
+        form.addEventListener('submit', addPerformance);
+        document.getElementById('exportBtn').addEventListener('click', exportData);
+        document.getElementById('clearBtn').addEventListener('click', clearAllEntries);
+
+        // Initialize DataTable
+        const table = $('#performanceTable').DataTable({
+            columns: [
+                { data: 'date' },
+                { data: 'game' },
+                { data: 'map' },
+                { data: 'cm360' },
+                { data: 'accuracy' },
+                { data: 'mousepad' },
+                { data: 'yourScore' },
+                { data: 'opponentScore' },
+                { data: 'outcome' },
+                {
+                    data: 'id',
+                    render: function(data) {
+                        return '<span class="delete-btn cursor-pointer text-red-500" data-id="' + data + '">🗑️</span>';
+                    }
+                }
+            ]
+        });
+
+        // Function to update map options based on selected game
+        function updateMapOptions() {
+            const selectedGame = gameSelect.value;
+            mapOptions.innerHTML = '';
+            mapSelect.value = '';
+            
+            if (selectedGame in mapsByGame) {
+                mapsByGame[selectedGame].forEach(map => {
+                    const mapItem = document.createElement('div');
+                    mapItem.className = 'map-item p-2 hover:bg-gray-100 cursor-pointer';
+                    mapItem.textContent = map;
+                    mapItem.addEventListener('click', () => selectMap(map));
+                    mapOptions.appendChild(mapItem);
+                });
+            }
+        }
+
+        // Function to toggle map options visibility
+        function toggleMapOptions() {
+            mapOptions.classList.toggle('hidden');
+        }
+
+        // Function to handle clicks outside the map options
+        function handleOutsideClick(e) {
+            if (!mapSelect.contains(e.target) && !mapOptions.contains(e.target)) {
+                mapOptions.classList.add('hidden');
+            }
+        }
+
+        // Function to select a map
+        function selectMap(map) {
+            mapSelect.value = map;
+            mapOptions.classList.add('hidden');
+        }
+
+        // Function to add performance data
+        async function addPerformance(e) {
+            e.preventDefault();
+            const yourScore = parseInt(document.getElementById('yourScore').value);
+            const opponentScore = parseInt(document.getElementById('opponentScore').value);
+            const outcome = yourScore > opponentScore ? 'W' : (yourScore < opponentScore ? 'L' : 'T');
+            
+            const performance = {
+                date: new Date().toLocaleString(),
+                game: gameSelect.value,
+                map: mapSelect.value,
+                cm360: parseFloat(document.getElementById('cm360').value),
+                accuracy: parseFloat(document.getElementById('accuracy').value),
+                mousepad: document.getElementById('mousepad').value,
+                yourScore: yourScore,
+                opponentScore: opponentScore,
+                outcome: outcome
+            };
+
+            const id = await db.performances.add(performance);
+            performance.id = id;
+            table.row.add(performance).draw();
+            form.reset();
+            mapSelect.value = '';
+            updateCharts();
+        }
+
+        // Function to delete performance data
+        async function deletePerformance(id) {
+            if (confirm('Are you sure you want to delete this record?')) {
+                await db.performances.delete(id);
+                table.row($(`[data-id="${id}"]`).parents('tr')).remove().draw();
+                updateCharts();
+            }
+        }
+
+        // Add event listener for delete buttons
+        $('#performanceTable').on('click', '.delete-btn', function() {
+            const id = $(this).data('id');
+            deletePerformance(id);
+        });
+
+        // Function to export data as CSV
+        async function exportData() {
+            const performances = await db.performances.toArray();
+            const csv = [
+                ['Date', 'Game', 'Map', 'cm/360', 'Accuracy', 'Mousepad', 'Your Score', 'Opponent Score', 'Outcome'],
+                ...performances.map(p => [
+                    p.date, p.game, p.map, p.cm360, p.accuracy, p.mousepad, p.yourScore, p.opponentScore, p.outcome
+                ])
+            ].map(row => row.join(',')).join('\n');
+
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'gaming_performance.csv';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // Function to clear all performance data
+        async function clearAllEntries() {
+            if (confirm('Are you sure you want to clear all entries?')) {
+                await db.performances.clear();
+                table.clear().draw();
+                updateCharts();
+            }
+        }
+
+        // Function to update charts
+        async function updateCharts() {
+            const performances = await db.performances.toArray();
+            updateAccuracyCm360Chart(performances);
+            updateAccuracyMousepadChart(performances);
+        }
+
+        // Function to update Accuracy vs cm/360 chart
+        function updateAccuracyCm360Chart(performances) {
+            const ctx = document.getElementById('accuracyCm360Chart').getContext('2d');
+            
+            if (accuracyCm360Chart) {
+                accuracyCm360Chart.destroy();
+            }
+            
+            accuracyCm360Chart = new Chart(ctx, {
+                type: 'scatter',
+                data: {
+                    datasets: [{
+                        label: 'Accuracy vs cm/360',
+                        data: performances.map(p => ({x: parseFloat(p.cm360), y: parseFloat(p.accuracy)})),
+                        backgroundColor: performances.map(p => p.game === 'Splitgate' ? 'rgba(75, 192, 192, 0.6)' : 'rgba(255, 99, 132, 0.6)')
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        x: {
+                            type: 'linear',
+                            position: 'bottom',
+                            title: {
+                                display: true,
+                                text: 'cm/360'
+                            }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Accuracy (%)'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Function to update Accuracy vs Mousepad chart
+        function updateAccuracyMousepadChart(performances) {
+            const ctx = document.getElementById('accuracyMousepadChart').getContext('2d');
+            
+            if (accuracyMousepadChart) {
+                accuracyMousepadChart.destroy();
+            }
+            
+            const mousepads = [...new Set(performances.map(p => p.mousepad))];
+            const datasets = mousepads.map(mousepad => {
+                const data = performances
+                    .filter(p => p.mousepad === mousepad)
+                    .map(p => ({x: new Date(p.date), y: parseFloat(p.accuracy)}));
+                return {
+                    label: mousepad,
+                    data: data,
+                    borderColor: `rgba(${Math.random()*255},${Math.random()*255},${Math.random()*255},1)`,
+                    fill: false
+                };
+            });
+            
+            accuracyMousepadChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    datasets: datasets
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'day'
+                            },
+                            title: {
+                                display: true,
+                                text: 'Date'
+                            }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Accuracy (%)'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Initial setup
+        updateMapOptions();
+        updateCharts();
+    </script>
+</body>
+</html>
